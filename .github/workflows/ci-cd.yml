@@ -1,0 +1,305 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22.x'
+  ARTEFATO: reserva-sala-de-estudos-build
+
+jobs:
+  # Verificação estática: estilo e erros de código.
+  qualidade:
+    name: Qualidade de código
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier
+        run: npm run format:check
+
+  # Verificação estática de segurança: CodeQL no código, npm audit nas dependências.
+  seguranca:
+    name: Análise de segurança
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: npm audit
+        run: npm audit --audit-level=high
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:javascript-typescript'
+
+  # Verificação estática das dependências que o PR está introduzindo.
+  dependencias:
+    name: Revisão de dependências
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  # Verificação dinâmica: os testes executam o código em duas versões do Node.
+  testes:
+    name: Testes (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    needs: [qualidade]
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20.x', '22.x']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run test:coverage
+
+      - name: Mostrar a cobertura no resumo
+        if: always() && matrix.node == '22.x'
+        run: |
+          {
+            echo "### Cobertura de testes"
+            echo "| Métrica | % |"
+            echo "| --- | --- |"
+            node -e '
+              const t = require("./coverage/coverage-summary.json").total;
+              for (const m of ["statements", "branches", "functions", "lines"]) {
+                console.log(`| ${m} | ${t[m].pct}% |`);
+              }
+            '
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.node == '22.x'
+        with:
+          name: cobertura
+          path: coverage/
+          retention-days: 7
+
+  # Empacota uma única vez o que será promovido para os dois ambientes.
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [qualidade, seguranca, testes]
+    outputs:
+      versao: ${{ steps.versao.outputs.valor }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - id: versao
+        run: |
+          VERSAO="$(node -p "require('./package.json').version")+build.${GITHUB_RUN_NUMBER}"
+          echo "valor=${VERSAO}" >> "$GITHUB_OUTPUT"
+
+      - name: Montar o pacote
+        run: |
+          mkdir -p build
+          cp -r src public scripts package.json package-lock.json build/
+          cat > build/build-info.json <<EOF
+          {
+            "versao": "${{ steps.versao.outputs.valor }}",
+            "commit": "${GITHUB_SHA}",
+            "branch": "${GITHUB_REF_NAME}",
+            "data": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+
+      - name: Conferir se o pacote sobe sozinho
+        working-directory: build
+        run: |
+          npm ci --omit=dev
+          node -e "require('./src/app.js')"
+          rm -rf node_modules
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTEFATO }}
+          path: build
+          retention-days: 7
+
+  # AMBIENTE 1 — homologação. Sobe a aplicação e testa por fora: smoke tests
+  # HTTP e varredura dinâmica de segurança com o OWASP ZAP.
+  homologacao:
+    name: Deploy em homologação
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.event_name != 'pull_request'
+    environment:
+      name: homologacao
+      url: http://localhost:3000
+    env:
+      APP_ENV: homologacao
+      PORT: '3000'
+      BASE_URL: http://localhost:3000
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTEFATO }}
+          path: app
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Instalar dependências de produção
+        working-directory: app
+        run: npm ci --omit=dev
+
+      - name: Subir a aplicação
+        working-directory: app
+        run: |
+          nohup node src/server.js > servidor.log 2>&1 &
+          echo $! > servidor.pid
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "${BASE_URL}/health"; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::A aplicação não respondeu em homologação."
+          cat app/servidor.log
+          exit 1
+
+      - name: Smoke tests
+        working-directory: app
+        run: node scripts/smoke-test.js
+
+      - name: Varredura OWASP ZAP
+        uses: zaproxy/action-baseline@v0.12.0
+        continue-on-error: true
+        with:
+          target: http://localhost:3000
+          cmd_options: '-a -I'
+          allow_issue_writing: false
+          fail_action: false
+
+      - name: Derrubar a aplicação
+        if: always()
+        working-directory: app
+        run: |
+          cat servidor.log
+          kill "$(cat servidor.pid)" || true
+
+  # AMBIENTE 2 — produção. Só a partir da main, e o environment "producao"
+  # exige aprovação manual antes de começar.
+  producao:
+    name: Deploy em produção
+    runs-on: ubuntu-latest
+    needs: [build, homologacao]
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: producao
+      url: http://localhost:8080
+    permissions:
+      contents: write
+    env:
+      APP_ENV: producao
+      PORT: '8080'
+      BASE_URL: http://localhost:8080
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTEFATO }}
+          path: app
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Instalar dependências de produção
+        working-directory: app
+        run: npm ci --omit=dev
+
+      - name: Subir a aplicação
+        working-directory: app
+        run: |
+          nohup node src/server.js > servidor.log 2>&1 &
+          echo $! > servidor.pid
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "${BASE_URL}/health"; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::A aplicação não respondeu em produção."
+          cat app/servidor.log
+          exit 1
+
+      - name: Smoke tests
+        working-directory: app
+        run: node scripts/smoke-test.js
+
+      - name: Publicar a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSAO: ${{ needs.build.outputs.versao }}
+        run: |
+          tar -czf "reserva-sala-de-estudos-${VERSAO}.tgz" -C app .
+          gh release create "v${VERSAO}" "reserva-sala-de-estudos-${VERSAO}.tgz" \
+            --title "Reserva de Salas v${VERSAO}" \
+            --notes "Deploy em produção a partir do commit ${GITHUB_SHA}." \
+            --target "${GITHUB_SHA}"
+
+      - name: Derrubar a aplicação
+        if: always()
+        working-directory: app
+        run: |
+          cat servidor.log
+          kill "$(cat servidor.pid)" || true

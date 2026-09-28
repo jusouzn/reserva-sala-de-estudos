@@ -1,0 +1,7 @@
+# Normaliza as quebras de linha para LF no repositório, para que o Prettier
+# (endOfLine: "lf") valide igual no Windows e nos runners Linux do GitHub Actions.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.tgz binary

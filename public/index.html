@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reserva de Salas de Estudo · Biblioteca Central</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="estilo.css" />
+  </head>
+  <body>
+    <header class="topo">
+      <div class="container topo-conteudo">
+        <div>
+          <p class="selo">Biblioteca Central</p>
+          <h1>Reserva de Salas de Estudo</h1>
+        </div>
+        <p class="topo-nota">
+          Salas para trabalho em grupo, disponíveis das 08&nbsp;h às 22&nbsp;h.<br />
+          Reserve de 1 a 3 horas, até duas vezes por dia.
+        </p>
+      </div>
+    </header>
+
+    <main class="container layout">
+      <aside class="coluna-lateral">
+        <form class="cartao formulario" id="form-reserva">
+          <h2>Fazer uma reserva</h2>
+
+          <div class="campo">
+            <label for="campo-data">Dia</label>
+            <input type="date" id="campo-data" name="data" required />
+          </div>
+
+          <div class="campo">
+            <label for="campo-sala">Sala</label>
+            <select id="campo-sala" name="salaId" required></select>
+          </div>
+
+          <div class="dupla">
+            <div class="campo">
+              <label for="campo-inicio">Das</label>
+              <select id="campo-inicio" name="inicio" required></select>
+            </div>
+            <div class="campo">
+              <label for="campo-fim">Às</label>
+              <select id="campo-fim" name="fim" required></select>
+            </div>
+          </div>
+
+          <hr />
+
+          <div class="campo">
+            <label for="campo-aluno">Nome</label>
+            <input
+              type="text"
+              id="campo-aluno"
+              name="aluno"
+              required
+              minlength="3"
+              autocomplete="name"
+              placeholder="Ana Ribeiro"
+            />
+          </div>
+
+          <div class="campo">
+            <label for="campo-matricula">Matrícula</label>
+            <input
+              type="text"
+              id="campo-matricula"
+              name="matricula"
+              required
+              inputmode="numeric"
+              pattern="\d{8}"
+              placeholder="20231045"
+            />
+          </div>
+
+          <button type="submit">Confirmar reserva</button>
+
+          <div id="mensagem" class="mensagem" hidden></div>
+        </form>
+      </aside>
+
+      <section class="coluna-principal">
+        <div class="titulo-secao">
+          <h2>Agenda do dia</h2>
+          <span id="rotulo-data"></span>
+        </div>
+
+        <div id="agenda" class="agenda"></div>
+
+        <div class="titulo-secao espaco">
+          <h2>Minhas reservas</h2>
+          <span id="rotulo-matricula"></span>
+        </div>
+
+        <div id="minhas-reservas" class="cartao"></div>
+      </section>
+    </main>
+
+    <footer class="rodape">
+      <div class="container">
+        <span id="rodape"></span>
+      </div>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
